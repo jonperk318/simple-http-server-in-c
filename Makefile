@@ -1,0 +1,17 @@
+cc=gcc
+flags=-Wall
+src=src
+bin=bin
+
+default: all
+
+all: setup clean $(bin)/server
+
+setup:
+	mkdir -p $(bin)
+
+clean:
+	rm -f $(bin)/*
+
+$(bin)/server: $(src)/server.c
+	$(cc) $(flags) -o $@ $^
