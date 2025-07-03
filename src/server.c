@@ -5,6 +5,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h>
 
 
 // Constants
@@ -27,7 +29,7 @@ struct Bstring *bstring_init(size_t capacity, const char *const s);
 bool bstring_append(struct Bstring *self, const char *const s);
 void bstring_free(struct Bstring *self);
 
-struct Bstring *filename = NULL;
+struct Bstring *file = NULL;
 
 
 // HTTP methods
@@ -77,20 +79,66 @@ int server_fd = -1;
 struct sockaddr_in client_addr;
 socklen_t client_addr_len = sizeof(client_addr);
 
+
 // MAIN
 int main(int argc, char **argv) {
 
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int reuse = 1;
+    int connection_backlog = 5;
+
+    struct sockaddr_in server_addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(4221),
+        .sin_addr = {htonl(INADDR_ANY)},
+    };
+
     // Set directory for public files
     if (argc > 2) {
-        filename = bstring_init(0, argv[2]);
+        file = bstring_init(0, argv[2]);
         if (argv[2][strlen(argv[2]) - 1] != '/') {
-            bstring_append(filename, "/");
+            bstring_append(file, "/");
         }
     } else {
-        filename = bstring_init(0, "./public/");
+        file = bstring_init(0, "./public/");
     }
 
-    //printf("Filename: %s\n", filename->data);
-    printf("Hello, World!\n");
+    // Handle error with server file descriptor
+    if (server_fd == -1) {
+        printf("Error creating socket: %s\n", strerror(errno));
+        goto cleanup;
+    }
+
+    // Allow reuse of address upon server restart by forcing socket to connect to port
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) <
+          0) {
+        printf("Error forcing reuse of address: %s\n", strerror(errno));
+        goto cleanup;
+    }
+
+    // Check if bind failed
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
+        printf("Error binding socket to address: %s\n", strerror(errno));
+        goto cleanup;
+    }
+
+    // Check if listen failed
+    if (listen(server_fd, connection_backlog) != 0) {
+        printf("Error listening for connection: %s\n", strerror(errno));
+        goto cleanup;
+    }
+
+    printf("Connection ready\n");
+
+    // Cleanup
+    cleanup:
+      if (server_fd != -1) {
+          close(server_fd);
+      }
+
+      if (file != NULL) {
+          bstring_free(file);
+      }
+
     return 0;
 }
