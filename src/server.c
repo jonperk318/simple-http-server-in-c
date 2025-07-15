@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
@@ -12,13 +13,13 @@
 
 
 // ********** CONSTANTS AND VARIABLES ********** //
-const int PORT = 3001;
-const int CONNECTIONS = 10;
+const int PORT = 3000;
+const int REUSE = 1;
+const int CONNECTION_BACKLOG = 5;
 const int BSTRING_INIT_CAPACITY = 16;
 const char HTTP_VERSION[] = "HTTP/1.1";
 const int BUFFER_SIZE = 1024;
 const int MAX_HEADERS = 128;
-
 int server_fd = -1;
 
 
@@ -29,11 +30,11 @@ struct BString {
     size_t capacity;
 };
 
-struct Bstring *bstring_init(size_t capacity, const char *const s);
-bool bstring_append(struct Bstring *self, const char *const s);
-void bstring_free(struct Bstring *self);
+struct BString *bstring_init(size_t capacity, const char *const s);
+bool bstring_append(struct BString *self, const char *const s);
+void bstring_free(struct BString *self);
 
-struct Bstring *file = NULL;
+struct BString *file = NULL;
 
 
 // ********** HTTP METHODS ********** //
@@ -91,6 +92,7 @@ char *http_get_header(struct HTTPRequest *self, char *header) {
 
 // ********** HANDLING THE CONNECTION ********** //
 void handle_connection(int conn_fd);
+
 struct sockaddr_in client_addr;
 socklen_t client_addr_len = sizeof(client_addr);
 
@@ -143,8 +145,8 @@ void *_handle_connection(void *conn_fd_ptr) {
     req.path = strsep(&parse_buffer, " ");
 
     // Parse HTTP version
-    char *http_version = strsep(&parse_buffer, "\r");
-    parse_buffer++; // these consume empty lines
+    strsep(&parse_buffer, "\r");
+    parse_buffer++; // consume empty lines
 
     // Parse and store headers
     req.headers = malloc(sizeof(struct HTTPHeader) * MAX_HEADERS);
@@ -239,7 +241,7 @@ void *_handle_connection(void *conn_fd_ptr) {
             perror("Error with fopen()");
             goto cleanup;
         }
-        struct Bstring *res = bstring_init(0, HTTP_VERSION);
+        struct BString *res = bstring_init(0, HTTP_VERSION);
 
         // File does not exist
         if (errno == ENOENT) {
@@ -371,15 +373,15 @@ void handle_connection(int conn_fd) {
     pthread_create(&new_thread, NULL, _handle_connection, conn_fd_ptr);
 }
 
-// Initialize new Bstring or return NULL if error
-struct Bstring *bstring_init(size_t capacity, const char *const s) {
+// Initialize new BString or return NULL if error
+struct BString *bstring_init(size_t capacity, const char *const s) {
 
-    struct Bstring *bstr = malloc(sizeof(struct Bstring));
+    struct BString *bstr = malloc(sizeof(struct BString));
     if (bstr == NULL) { return NULL; }
     if (capacity == 0) { capacity = BSTRING_INIT_CAPACITY; }
     const size_t s_len = (s == NULL) ? 0 : strlen(s);
     if (s_len >= capacity) {
-      capacity = s_len + 1; // s length + null terminator
+      capacity = s_len + 1; // +1 for null terminator
     }
 
     bstr->data = malloc(sizeof(char) * capacity);
@@ -398,6 +400,41 @@ struct Bstring *bstring_init(size_t capacity, const char *const s) {
     return bstr;
 }
 
+// Append C string at the end of a BString
+bool bstring_append(struct BString *self, const char *const s) {
+
+    assert(self != NULL);
+    assert(s != NULL);
+
+    const size_t slen = strlen(s);
+    const size_t new_len = self->length + slen;
+
+    if (new_len >= self->capacity) {
+        size_t new_cap = self->capacity * 2;
+        if (new_len >= new_cap) {
+            new_cap = new_len + 1; // +1 for null terminator
+        }
+        char *new_data = realloc(self->data, new_cap);
+        if (new_data == NULL) {
+            return false;
+        }
+        self->data = new_data;
+        self->capacity = new_cap;
+    }
+
+    memcpy(&self->data[self->length], s, slen);
+    self->length = new_len;
+    self->data[new_len] = '\0';
+
+    return true;
+}
+
+void bstring_free(struct BString *self) {
+    assert(self != NULL);
+    free(self->data);
+    free(self);
+}
+
 
 // ************************** //
 // ********** MAIN ********** //
@@ -405,12 +442,10 @@ struct Bstring *bstring_init(size_t capacity, const char *const s) {
 int main(int argc, char **argv) {
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    int reuse = 1;
-    int connection_backlog = 5;
 
     struct sockaddr_in server_addr = {
         .sin_family = AF_INET,
-        .sin_port = htons(4221),
+        .sin_port = htons(PORT),
         .sin_addr = {htonl(INADDR_ANY)},
     };
 
@@ -431,7 +466,7 @@ int main(int argc, char **argv) {
     }
 
     // Allow reuse of address upon server restart by forcing socket to connect to port
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) <
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &REUSE , sizeof(REUSE )) <
           0) {
         printf("Error forcing reuse of address: %s\n", strerror(errno));
         goto cleanup;
@@ -444,12 +479,23 @@ int main(int argc, char **argv) {
     }
 
     // Check if listen failed
-    if (listen(server_fd, connection_backlog) != 0) {
+    if (listen(server_fd, CONNECTION_BACKLOG) != 0) {
         printf("Error listening for connection: %s\n", strerror(errno));
         goto cleanup;
     }
 
     printf("Connection ready\n");
+
+    while (true) {
+
+        int conn_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+        if (conn_fd == -1) {
+          printf("Error with accept(): %s \n", strerror(errno));
+          continue;
+        }
+
+        handle_connection(conn_fd);
+    }
 
     // Cleanup
     cleanup:
