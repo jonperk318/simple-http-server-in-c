@@ -5,7 +5,7 @@ bin=bin
 
 default: all
 
-all: setup clean $(bin)/server
+all: setup clean $(bin)/server run
 
 setup:
 	mkdir -p $(bin)
@@ -15,3 +15,6 @@ clean:
 
 $(bin)/server: $(src)/server.c
 	$(cc) $(flags) -o $@ $^
+
+run:
+	$(bin)/server

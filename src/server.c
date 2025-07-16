@@ -16,25 +16,25 @@
 const int PORT = 3000;
 const int REUSE = 1;
 const int CONNECTION_BACKLOG = 5;
-const int BSTRING_INIT_CAPACITY = 16;
+const int STRING_INIT_CAPACITY = 16;
 const char HTTP_VERSION[] = "HTTP/1.1";
 const int BUFFER_SIZE = 1024;
 const int MAX_HEADERS = 128;
 int server_fd = -1;
 
 
-// ********** BETTER STRING ********** //
-struct BString {
+// ********** DYNAMICALLY ALLOCATED STRING ********** //
+struct String {
     char *data;
     size_t length;
     size_t capacity;
 };
 
-struct BString *bstring_init(size_t capacity, const char *const s);
-bool bstring_append(struct BString *self, const char *const s);
-void bstring_free(struct BString *self);
+struct String *string_init(size_t capacity, const char *const s);
+bool string_append(struct String *self, const char *const s);
+void string_free(struct String *self);
 
-struct BString *file = NULL;
+struct String *file = NULL;
 
 
 // ********** HTTP METHODS ********** //
@@ -75,7 +75,7 @@ struct HTTPRequest {
     size_t headers_len;
     char *_buffer;
     size_t _buffer_len;
-    struct BString *body;
+    struct String *body;
 };
 
 char *http_get_header(struct HTTPRequest *self, char *header) {
@@ -87,6 +87,33 @@ char *http_get_header(struct HTTPRequest *self, char *header) {
         }
     }
     return NULL;
+}
+
+
+// ********** READ HTML FILE ********** //
+struct String *read_html_file(const char* filename) {
+
+    FILE *fp = fopen (filename, "rb");
+    if (fp == NULL) perror("Error opening HTML file");
+
+    fseek(fp , 0L , SEEK_END);
+    long lSize = ftell(fp);
+    rewind(fp);
+
+    char *content = calloc(1, lSize + 1);
+    if (content == NULL) {
+        fclose(fp);
+        fputs("Memory allocation failed", stderr);
+    }
+    if (fread(content, lSize, 1, fp) != 1) {
+        fclose(fp);
+        free(content);
+        fputs("Failed to read HTML file", stderr);
+    }
+
+    fclose(fp);
+    struct String *str = string_init(lSize, content);
+    return str;
 }
 
 
@@ -178,8 +205,8 @@ void *_handle_connection(void *conn_fd_ptr) {
     }
 
     if (content_len > 0) {
-        req.body = bstring_init(content_len + 1, NULL);
-        bstring_append(req.body, parse_buffer);
+        req.body = string_init(content_len + 1, NULL);
+        string_append(req.body, parse_buffer);
         if (req.body->length != content_len) {
             printf("Error: content length does not match request");
             goto cleanup;
@@ -191,8 +218,8 @@ void *_handle_connection(void *conn_fd_ptr) {
     // Send response
     if (strcmp(req.path, "/") == 0) {
 
-        const char res[] = "HTTP/1.1 200 OK\r\n\r\n";
-        bytes_sent = send(conn_fd, res, sizeof(res) - 1, 0);
+        struct String *str200 = read_html_file("./public/index.html");
+        bytes_sent = send(conn_fd, str200->data, str200->length, 0);
 
     } else if (strcmp(req.path, "/user-agent") == 0) {
 
@@ -232,7 +259,7 @@ void *_handle_connection(void *conn_fd_ptr) {
 
     } else if (req.method == HTTP_GET && strncmp(req.path, "/files/", 7) == 0) {
 
-        bstring_append(file, req.path + 7);
+        string_append(file, req.path + 7);
         errno = 0;
 
         // Open the file
@@ -241,12 +268,12 @@ void *_handle_connection(void *conn_fd_ptr) {
             perror("Error with fopen()");
             goto cleanup;
         }
-        struct BString *res = bstring_init(0, HTTP_VERSION);
+        struct String *res = string_init(0, HTTP_VERSION);
 
         // File does not exist
         if (errno == ENOENT) {
-            bstring_append(res, " 404 Not Found\r\n\r\n");
-            bytes_sent = send(conn_fd, res->data, res->length, 0);
+            struct String *str404 = read_html_file("./public/404.html");
+            bytes_sent = send(conn_fd, str404->data, str404->length, 0);
             goto cleanup;
         }
 
@@ -274,14 +301,14 @@ void *_handle_connection(void *conn_fd_ptr) {
         char file_size_str[sizeof(file_size) + 1];
         sprintf(file_size_str, "%ld", file_size);
 
-        bstring_append(res, " 200 OK\r\n");
-        bstring_append(res, "Content-Type: application/octet-stream\r\n");
-        bstring_append(res, "Content-Length: ");
-        bstring_append(res, file_size_str);
-        bstring_append(res, "\r\n\r\n");
+        string_append(res, " 200 OK\r\n");
+        string_append(res, "Content-Type: application/octet-stream\r\n");
+        string_append(res, "Content-Length: ");
+        string_append(res, file_size_str);
+        string_append(res, "\r\n\r\n");
 
         bytes_sent = send(conn_fd, res->data, res->length, 0);
-        bstring_free(res);
+        string_free(res);
 
         char buffer[BUFFER_SIZE];
 
@@ -302,7 +329,7 @@ void *_handle_connection(void *conn_fd_ptr) {
 
     } else if (req.method == HTTP_POST && strncmp(req.path, "/files/", 7) == 0) {
 
-        bstring_append(file, req.path + 7);
+        string_append(file, req.path + 7);
 
         // Check if file already exists
         errno = 0;
@@ -350,7 +377,7 @@ void *_handle_connection(void *conn_fd_ptr) {
         free(req._buffer);
         free(req.headers);
         if (req.body != NULL) {
-          bstring_free(req.body);
+          string_free(req.body);
         }
         close(conn_fd);
         if (fp != NULL) {
@@ -373,35 +400,35 @@ void handle_connection(int conn_fd) {
     pthread_create(&new_thread, NULL, _handle_connection, conn_fd_ptr);
 }
 
-// Initialize new BString or return NULL if error
-struct BString *bstring_init(size_t capacity, const char *const s) {
+// Initialize new String or return NULL if error
+struct String *string_init(size_t capacity, const char *const s) {
 
-    struct BString *bstr = malloc(sizeof(struct BString));
-    if (bstr == NULL) { return NULL; }
-    if (capacity == 0) { capacity = BSTRING_INIT_CAPACITY; }
+    struct String *str = malloc(sizeof(struct String));
+    if (str == NULL) { return NULL; }
+    if (capacity == 0) { capacity = STRING_INIT_CAPACITY; }
     const size_t s_len = (s == NULL) ? 0 : strlen(s);
     if (s_len >= capacity) {
       capacity = s_len + 1; // +1 for null terminator
     }
 
-    bstr->data = malloc(sizeof(char) * capacity);
-    if (bstr->data == NULL) {
-        free(bstr);
+    str->data = malloc(sizeof(char) * capacity);
+    if (str->data == NULL) {
+        free(str);
         return NULL;
     }
     if (s != NULL) {
-        memcpy(bstr->data, s, s_len);
+        memcpy(str->data, s, s_len);
     }
 
-    bstr->capacity = capacity;
-    bstr->length = s_len;
-    bstr->data[s_len] = '\0';
+    str->capacity = capacity;
+    str->length = s_len;
+    str->data[s_len] = '\0';
 
-    return bstr;
+    return str;
 }
 
-// Append C string at the end of a BString
-bool bstring_append(struct BString *self, const char *const s) {
+// Append C string at the end of a String
+bool string_append(struct String *self, const char *const s) {
 
     assert(self != NULL);
     assert(s != NULL);
@@ -429,7 +456,7 @@ bool bstring_append(struct BString *self, const char *const s) {
     return true;
 }
 
-void bstring_free(struct BString *self) {
+void string_free(struct String *self) {
     assert(self != NULL);
     free(self->data);
     free(self);
@@ -451,12 +478,12 @@ int main(int argc, char **argv) {
 
     // Set directory for public files
     if (argc > 2) {
-        file = bstring_init(0, argv[2]);
+        file = string_init(0, argv[2]);
         if (argv[2][strlen(argv[2]) - 1] != '/') {
-            bstring_append(file, "/");
+            string_append(file, "/");
         }
     } else {
-        file = bstring_init(0, "./public/");
+        file = string_init(0, "./public/");
     }
 
     // Handle error with server file descriptor
@@ -486,6 +513,7 @@ int main(int argc, char **argv) {
 
     printf("Connection ready\n");
 
+    // Handle connection
     while (true) {
 
         int conn_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
@@ -497,14 +525,13 @@ int main(int argc, char **argv) {
         handle_connection(conn_fd);
     }
 
-    // Cleanup
     cleanup:
         if (server_fd != -1) {
             close(server_fd);
         }
 
         if (file != NULL) {
-            bstring_free(file);
+            string_free(file);
         }
 
     return 0;

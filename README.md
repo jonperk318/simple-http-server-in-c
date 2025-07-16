@@ -16,6 +16,10 @@ It listens on port 3000 default.
     ```
 3. Test the server with `curl`
     ```bash
+    curl -v --http0.9 localhost:3000/
+    ```
+    or
+    ```bash
     curl -v localhost:3000/echo/test
     ```
 4. Stop the server with `Ctrl+C`
