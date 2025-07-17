@@ -91,7 +91,7 @@ char *http_get_header(struct HTTPRequest *self, char *header) {
 
 
 // ********** READ HTML FILE ********** //
-struct String *read_html_file(const char* filename) {
+char *read_html_file(const char* filename) {
 
     FILE *fp = fopen (filename, "rb");
     if (fp == NULL) perror("Error opening HTML file");
@@ -112,8 +112,7 @@ struct String *read_html_file(const char* filename) {
     }
 
     fclose(fp);
-    struct String *str = string_init(lSize, content);
-    return str;
+    return content;
 }
 
 
@@ -217,9 +216,9 @@ void *_handle_connection(void *conn_fd_ptr) {
 
     // Send response
     if (strcmp(req.path, "/") == 0) {
-
-        struct String *str200 = read_html_file("./public/index.html");
-        bytes_sent = send(conn_fd, str200->data, str200->length, 0);
+        struct String *res = string_init(0, "HTTP/1.1 200 OK\r\n\r\n");
+        string_append(res, read_html_file("./public/index.html"));
+        bytes_sent = send(conn_fd, res->data, res->length, 0);
 
     } else if (strcmp(req.path, "/user-agent") == 0) {
 
@@ -265,6 +264,9 @@ void *_handle_connection(void *conn_fd_ptr) {
         // Open the file
         fp = fopen(file->data, "r");
         if (fp == NULL && errno != ENOENT) {
+            struct String *res = string_init(0, "HTTP/1.1 400 Bad Request\r\n\r\n");
+            string_append(res, read_html_file("./public/400.html"));
+            bytes_sent = send(conn_fd, res->data, res->length, 0);
             perror("Error with fopen()");
             goto cleanup;
         }
@@ -272,28 +274,38 @@ void *_handle_connection(void *conn_fd_ptr) {
 
         // File does not exist
         if (errno == ENOENT) {
-            struct String *str404 = read_html_file("./public/404.html");
-            bytes_sent = send(conn_fd, str404->data, str404->length, 0);
+            struct String *res = string_init(0, "HTTP/1.1 404 Not Found\r\n\r\n");
+            string_append(res, read_html_file("./public/404.html"));
+            bytes_sent = send(conn_fd, res->data, res->length, 0);
             goto cleanup;
         }
 
-        // Go to end of file
+        // Error with going to end of file
         if (fseek(fp, 0, SEEK_END) != 0) {
+            struct String *res = string_init(0, "HTTP/1.1 400 Bad Request\r\n\r\n");
+            string_append(res, read_html_file("./public/400.html"));
+            bytes_sent = send(conn_fd, res->data, res->length, 0);
             perror("Error with fseek()");
             goto cleanup;
         }
 
-        // Get file size
+        // Error with getting file size
         long file_size = ftell(fp);
         if (file_size < 0) {
+            struct String *res = string_init(0, "HTTP/1.1 400 Bad Request\r\n\r\n");
+            string_append(res, read_html_file("./public/400.html"));
+            bytes_sent = send(conn_fd, res->data, res->length, 0);
             perror("Error with fseek()");
             goto cleanup;
         }
 
-        // Go back to beginning of file
+        // Error with going to beginning of file
         errno = 0;
         rewind(fp);
         if (errno != 0) {
+            struct String *res = string_init(0, "HTTP/1.1 400 Bad Request\r\n\r\n");
+            string_append(res, read_html_file("./public/400.html"));
+            bytes_sent = send(conn_fd, res->data, res->length, 0);
             perror("Error with rewind()");
             goto cleanup;
         }
@@ -317,8 +329,11 @@ void *_handle_connection(void *conn_fd_ptr) {
             long bytes_to_read = file_size > BUFFER_SIZE ? BUFFER_SIZE : file_size;
             size_t bytes_read = fread(buffer, bytes_to_read, 1, fp);
 
-            // Check if bytes_read is less than expected because of error
+            // Check if bytes_read is less than expected due to error
             if (bytes_read < bytes_to_read && ferror(fp)) {
+                struct String *res = string_init(0, "HTTP/1.1 400 Bad Request\r\n\r\n");
+                string_append(res, read_html_file("./public/400.html"));
+                bytes_sent = send(conn_fd, res->data, res->length, 0);
                 puts("Error with fread()");
                 goto cleanup;
             }
@@ -335,8 +350,9 @@ void *_handle_connection(void *conn_fd_ptr) {
         errno = 0;
         fp = fopen(file->data, "r");
         if (fp != NULL) {
-            const char res[] = "HTTP/1.1 409 Conflict\r\n\r\n";
-            bytes_sent = send(conn_fd, res, sizeof(res) - 1, 0);
+            struct String *res = string_init(0, "HTTP/1.1 409 Conflict\r\n\r\n");
+            string_append(res, read_html_file("./public/400.html"));
+            bytes_sent = send(conn_fd, res->data, res->length, 0);
             goto cleanup;
         }
 
@@ -344,6 +360,9 @@ void *_handle_connection(void *conn_fd_ptr) {
         errno = 0;
         fp = fopen(file->data, "w");
         if (fp == NULL) {
+            struct String *res = string_init(0, "HTTP/1.1 400 Bad Request\r\n\r\n");
+            string_append(res, read_html_file("./public/400.html"));
+            bytes_sent = send(conn_fd, res->data, res->length, 0);
             perror("Error with fopen()");
             goto cleanup;
         }
@@ -364,11 +383,16 @@ void *_handle_connection(void *conn_fd_ptr) {
 
     } else {
 
-        const char res[] = "HTTP/1.1 404 Not Found\r\n\r\n";
-        bytes_sent = send(conn_fd, res, sizeof(res) - 1, 0);
+        struct String *res = string_init(0, "HTTP/1.1 404 Not Found\r\n\r\n");
+        string_append(res, read_html_file("./public/404.html"));
+        bytes_sent = send(conn_fd, res->data, res->length, 0);
+
     }
 
     if (bytes_sent == -1) {
+        struct String *res = string_init(0, "HTTP/1.1 400 Bad Request\r\n\r\n");
+        string_append(res, read_html_file("./public/400.html"));
+        bytes_sent = send(conn_fd, res->data, res->length, 0);
         perror("Error with send()");
     }
 
