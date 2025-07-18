@@ -431,9 +431,7 @@ struct String *string_init(size_t capacity, const char *const s) {
     if (str == NULL) { return NULL; }
     if (capacity == 0) { capacity = STRING_INIT_CAPACITY; }
     const size_t s_len = (s == NULL) ? 0 : strlen(s);
-    if (s_len >= capacity) {
-      capacity = s_len + 1; // +1 for null terminator
-    }
+    if (s_len >= capacity) { capacity = s_len + 1; } // +1 for null terminator
 
     str->data = malloc(sizeof(char) * capacity);
     if (str->data == NULL) {

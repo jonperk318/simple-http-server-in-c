@@ -24,7 +24,7 @@ It listens on port 3000 default.
     ```
     or
     ```bash
-    curl -v localhost:3000/files/asdfghjkl
+    curl -v localhost:3000/asdfghjkl
     ```
 4. Test the server on a browser by going to `localhost:3000`
 5. Stop the server with `Ctrl+C`
